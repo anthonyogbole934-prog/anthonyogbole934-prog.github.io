@@ -42,23 +42,28 @@ today = lambda: dt.date.today().isoformat()
 log = lambda *a: print(f"[{dt.datetime.now():%H:%M:%S}]", *a, flush=True)
 
 # ---------------- LLM (any OpenAI-compatible API; default = free Gemini) ----------------
+FALLBACKS = [m.strip() for m in cfg("LLM_FALLBACK_MODELS", "gemini-flash-lite-latest").split(",") if m.strip()]
+
 def ask(system, prompt, as_json=False, max_tokens=8000):
-    for attempt in range(4):
+    models = [LLM_MODEL] + [m for m in FALLBACKS if m != LLM_MODEL]
+    for attempt in range(8):
+        model = models[(attempt // 2) % len(models)]  # switch to the backup model if the main one stays busy
         try:
             r = requests.post(f"{LLM_BASE}/chat/completions", timeout=240,
                 headers={"Authorization": f"Bearer {LLM_KEY}", "Content-Type": "application/json"},
-                json={"model": LLM_MODEL, "max_tokens": max_tokens,
+                json={"model": model, "max_tokens": max_tokens,
                       "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]})
-            if r.status_code == 429:
-                log("rate limited, waiting 60s"); time.sleep(60); continue
+            if r.status_code in (429, 500, 502, 503, 504):  # busy / overloaded: wait longer and try again
+                wait = min(30 * (attempt + 1), 180)
+                log(f"AI busy ({r.status_code}) on {model}, waiting {wait}s"); time.sleep(wait); continue
             r.raise_for_status()
             text = r.json()["choices"][0]["message"]["content"]
             time.sleep(4)  # stay under free-tier requests-per-minute
             if not as_json: return text
             return json.loads(re.search(r"(\{.*\}|\[.*\])", text, re.S).group(1), strict=False)
         except Exception as ex:
-            log("LLM retry", attempt, ex); time.sleep(10 * (attempt + 1))
-    raise RuntimeError("LLM failed. Check LLM_API_KEY and LLM_MODEL.")
+            log("LLM retry", attempt, model, ex); time.sleep(15)
+    raise RuntimeError("LLM failed after many tries. Check LLM_API_KEY / LLM_MODEL, or run again later.")
 
 # ---------------- strategist ----------------
 def performance_summary():
