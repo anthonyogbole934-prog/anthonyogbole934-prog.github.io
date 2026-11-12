@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+{% seo %}
+{% feed_meta %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Poppins:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ '/assets/css/style.css' | relative_url }}">
+</head>
+<body>
+<header class="site-header"><div class="wrap bar">
+<a class="brand" href="{{ '/' | relative_url }}">☀️ {{ site.title }}</a>
+<nav>
+<a href="{{ '/' | relative_url }}">Home</a>
+<a href="{{ '/videos/' | relative_url }}">Videos</a>
+<a href="{{ '/about/' | relative_url }}">About</a>
+{% if site.youtube_channel and site.youtube_channel != "" %}<a class="btn small" href="{{ site.youtube_channel }}">▶ Subscribe</a>{% endif %}
+</nav></div></header>
+<main>{{ content }}</main>
+<footer class="site-footer"><div class="wrap">
+<p><strong>{{ site.title }}</strong>: {{ site.description }}</p>
+<p><a href="{{ '/about/' | relative_url }}">About</a> · <a href="{{ '/privacy/' | relative_url }}">Privacy</a> · <a href="{{ '/disclaimer/' | relative_url }}">Disclaimer</a> · <a href="{{ '/feed.xml' | relative_url }}">RSS</a></p>
+<p class="small">Some links are affiliate links. We may earn a commission at no extra cost to you.</p>
+</div></footer>
+</body></html>

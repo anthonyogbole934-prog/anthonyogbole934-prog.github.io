@@ -1,0 +1,16 @@
+---
+layout: default
+---
+<article class="post wrap narrow">
+<header class="post-header">
+<span class="date">{{ page.date | date: "%B %d, %Y" }} · {{ content | number_of_words | divided_by: 220 | plus: 1 }} min read</span>
+<h1>{{ page.title }}</h1>
+<p class="lede">{{ page.description }}</p>
+</header>
+{% if page.youtube %}
+<div class="video"><iframe src="https://www.youtube-nocookie.com/embed/{{ page.youtube }}" title="{{ page.title | escape }}" allowfullscreen loading="lazy"></iframe></div>
+{% elsif page.image %}
+<figure class="hero-img"><img src="{{ page.image | relative_url }}" alt="{{ page.title | escape }}">{% if page.image_credit %}<figcaption>{{ page.image_credit }}</figcaption>{% endif %}</figure>
+{% endif %}
+<div class="content">{{ content }}</div>
+</article>

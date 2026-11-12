@@ -1,0 +1,23 @@
+---
+layout: default
+---
+<section class="hero"><div class="wrap">
+<h1>Work smarter. Earn more.<br><span>Tools &amp; ideas for freelancers and remote workers.</span></h1>
+<p>{{ site.description }}</p>
+<a class="btn big" href="#latest">Read the latest ↓</a>
+{% if site.youtube_channel and site.youtube_channel != "" %}<a class="btn big ghost" href="{{ site.youtube_channel }}">▶ Watch on YouTube</a>{% endif %}
+</div></section>
+<section class="wrap" id="latest">
+<h2 class="section-title">Latest articles</h2>
+<div class="grid">
+{% for post in site.posts %}
+<a class="card" href="{{ post.url | relative_url }}">
+<div class="thumb">
+{% if post.image %}<img src="{{ post.image | relative_url }}" alt="{{ post.title | escape }}" loading="lazy">{% else %}<div class="thumb-fallback">{{ post.title }}</div>{% endif %}
+{% if post.youtube %}<span class="play">▶ Video</span>{% endif %}
+</div>
+<div class="card-body"><span class="date">{{ post.date | date: "%b %d, %Y" }}</span>
+<h3>{{ post.title }}</h3><p>{{ post.description | truncate: 120 }}</p><span class="more">Read more →</span></div>
+</a>
+{% endfor %}
+</div></section>

@@ -1,15 +1,11 @@
 title: SoloStack
 description: Practical AI tools, software reviews and online income ideas for freelancers, remote workers and solo business owners.
-theme: minima
+youtube_channel: ""   # paste your YouTube channel link here later
 plugins:
   - jekyll-seo-tag
   - jekyll-sitemap
   - jekyll-feed
 permalink: /:title/
-header_pages:
-  - about.md
-  - privacy.md
-  - disclaimer.md
 exclude:
   - blog_manager.py
   - data
@@ -17,3 +13,5 @@ exclude:
   - affiliates.json
   - SETUP_GUIDE.md
   - workflow_copy.yml
+  - video_scripts
+  - blog_manager(1).py

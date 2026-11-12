@@ -12,6 +12,11 @@ Commands: once | run | report | approve
 import os, sys, re, csv, json, time, sqlite3, datetime as dt
 from urllib.parse import urlparse
 import requests
+try:
+    import PIL  # noqa
+except ImportError:
+    import subprocess
+    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "pillow"], check=False)
 
 # ---------------- config (all optional; sensible defaults) ----------------
 def cfg(k, d=""): return os.environ.get(k) or d
@@ -42,23 +47,28 @@ today = lambda: dt.date.today().isoformat()
 log = lambda *a: print(f"[{dt.datetime.now():%H:%M:%S}]", *a, flush=True)
 
 # ---------------- LLM (any OpenAI-compatible API; default = free Gemini) ----------------
+FALLBACKS = [m.strip() for m in cfg("LLM_FALLBACK_MODELS", "gemini-flash-lite-latest").split(",") if m.strip()]
+
 def ask(system, prompt, as_json=False, max_tokens=8000):
-    for attempt in range(4):
+    models = [LLM_MODEL] + [m for m in FALLBACKS if m != LLM_MODEL]
+    for attempt in range(8):
+        model = models[(attempt // 2) % len(models)]  # switch to the backup model if the main one stays busy
         try:
             r = requests.post(f"{LLM_BASE}/chat/completions", timeout=240,
                 headers={"Authorization": f"Bearer {LLM_KEY}", "Content-Type": "application/json"},
-                json={"model": LLM_MODEL, "max_tokens": max_tokens,
+                json={"model": model, "max_tokens": max_tokens,
                       "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]})
-            if r.status_code == 429:
-                log("rate limited, waiting 60s"); time.sleep(60); continue
+            if r.status_code in (429, 500, 502, 503, 504):  # busy / overloaded: wait longer and try again
+                wait = min(30 * (attempt + 1), 180)
+                log(f"AI busy ({r.status_code}) on {model}, waiting {wait}s"); time.sleep(wait); continue
             r.raise_for_status()
             text = r.json()["choices"][0]["message"]["content"]
             time.sleep(4)  # stay under free-tier requests-per-minute
             if not as_json: return text
             return json.loads(re.search(r"(\{.*\}|\[.*\])", text, re.S).group(1), strict=False)
         except Exception as ex:
-            log("LLM retry", attempt, ex); time.sleep(10 * (attempt + 1))
-    raise RuntimeError("LLM failed. Check LLM_API_KEY and LLM_MODEL.")
+            log("LLM retry", attempt, model, ex); time.sleep(15)
+    raise RuntimeError("LLM failed after many tries. Check LLM_API_KEY / LLM_MODEL, or run again later.")
 
 # ---------------- strategist ----------------
 def performance_summary():
@@ -89,6 +99,10 @@ or stay general and tell readers to check the official site; give honest pros AN
 answer the search intent in the first paragraph; use H2/H3 structure, concrete examples, a short conclusion.
 Do not put an FAQ in html; put 3-5 FAQs in "faq". Output JSON only:
 {"title","slug","meta_description"(<=155 chars),"tags":[],"faq":[{"q","a"}],"html"} (html = body only, no <h1>)."""
+
+WRITER_SYS += (f"\nToday's date is {today()}. Only put a year in the title if it is {dt.date.today().year}; never use older years. "
+    "Proofread carefully: no typos. Do not state exact prices, free-plan limits or policy details unless you are certain; "
+    "otherwise say 'check the official site for current pricing'. Prefer timeless advice over fast-changing specifics.")
 
 def affiliates():
     try: return json.load(open("affiliates.json"))
@@ -146,15 +160,114 @@ def unique_slug(s):
     while db.execute("SELECT 1 FROM posts WHERE slug=?", (s,)).fetchone(): s = f"{base}-{n}"; n += 1
     return s
 
+# ---------------- pictures & video scripts ----------------
+def make_cover(title, cluster, slug):
+    """Branded 1200x630 cover image (also used when the post is shared on social media)."""
+    path = f"assets/covers/{slug}.png"
+    try:
+        import textwrap, hashlib
+        from PIL import Image, ImageDraw, ImageFont
+        pal = [((255, 107, 74), (255, 170, 90)), ((14, 159, 148), (59, 130, 246)), ((139, 92, 246), (236, 72, 153)),
+               ((245, 158, 11), (239, 68, 68)), ((16, 185, 129), (101, 163, 13))]
+        a, b = pal[int(hashlib.md5(cluster.encode()).hexdigest(), 16) % len(pal)]
+        W, H = 1200, 630
+        img = Image.new("RGB", (W, H)); d = ImageDraw.Draw(img)
+        for y in range(H):
+            t = y / H; d.line([(0, y), (W, y)], fill=tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3)))
+        ov = Image.new("RGBA", (W, H), (0, 0, 0, 0)); od = ImageDraw.Draw(ov)
+        od.ellipse((850, -170, 1370, 350), fill=(255, 255, 255, 42)); od.ellipse((-170, 400, 350, 920), fill=(255, 255, 255, 36))
+        od.ellipse((960, 390, 1260, 690), fill=(255, 255, 255, 30))
+        img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB"); d = ImageDraw.Draw(img)
+        fb = next((f for f in ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                               "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf") if os.path.exists(f)), None)
+        F = lambda n: ImageFont.truetype(fb, n) if fb else ImageFont.load_default()
+        title = re.sub(r"\s*[\(\[]?(19|20)\d\d[\)\]]?\s*$", "", title)
+        size = 66 if len(title) < 55 else 54 if len(title) < 85 else 46
+        lines = textwrap.wrap(title, width=max(12, int(1020 / (size * 0.62))))[:4]
+        lh = int(size * 1.28); y0 = (H - lh * len(lines)) // 2 + 15
+        for i, ln in enumerate(lines):
+            d.text((72, y0 + i * lh + 3), ln, font=F(size), fill=tuple(int(c * 0.55) for c in a))
+            d.text((70, y0 + i * lh), ln, font=F(size), fill=(255, 255, 255))
+        f = F(28); label = "SoloStack"; tw = d.textlength(label, font=f)
+        d.rounded_rectangle((60, 46, 60 + tw + 44, 100), 27, fill=(255, 255, 255)); d.text((82, 55), label, font=f, fill=tuple(int(c * 0.8) for c in a))
+        tag = cluster.upper()[:28]; tw = d.textlength(tag, font=F(24))
+        d.rounded_rectangle((60, 540, 60 + tw + 40, 586), 23, outline=(255, 255, 255), width=3); d.text((80, 548), tag, font=F(24), fill=(255, 255, 255))
+        os.makedirs("assets/covers", exist_ok=True); img.save(path, optimize=True)
+        return "/" + path
+    except Exception as ex:
+        log("cover failed:", ex); return None
+
+PEXELS = cfg("PEXELS_API_KEY")
+def pexels_photo(query, slug):
+    """Optional: a real free stock photo, if you add a free PEXELS_API_KEY."""
+    if not PEXELS: return None
+    try:
+        r = requests.get("https://api.pexels.com/v1/search", headers={"Authorization": PEXELS}, timeout=30,
+                         params={"query": query, "per_page": 1, "orientation": "landscape"}); r.raise_for_status()
+        ph = r.json()["photos"][0]
+        data = requests.get(ph["src"]["large"], timeout=60).content
+        os.makedirs("assets/covers", exist_ok=True)
+        open(f"assets/covers/{slug}.jpg", "wb").write(data)
+        open(f"assets/covers/{slug}.txt", "w").write(f"Photo by {ph['photographer']} on Pexels")
+        return f"/assets/covers/{slug}.jpg"
+    except Exception as ex:
+        log("pexels skipped:", ex); return None
+
+def ensure_cover(p):
+    for ext in ("jpg", "png"):
+        if os.path.exists(f"assets/covers/{p['slug']}.{ext}"): return f"/assets/covers/{p['slug']}.{ext}"
+    t = db.execute("SELECT keyword,cluster FROM topics WHERE id=?", (p["topic_id"],)).fetchone()
+    return pexels_photo(t["keyword"], p["slug"]) or make_cover(p["title"], (t["cluster"] or "general"), p["slug"])
+
+def video_script(p):
+    """Saves a ready-to-record YouTube/Shorts script for each post (for your future channel)."""
+    path = f"video_scripts/{p['slug']}.md"
+    if cfg("GENERATE_VIDEO_SCRIPTS", "true").lower() != "true" or os.path.exists(path): return
+    try:
+        body = re.sub(r"<[^>]+>", " ", re.sub(r"<script.*?</script>", "", p["html"], flags=re.S))[:6000]
+        txt = ask("You write short, engaging YouTube scripts. Plain text, no markdown tables.",
+            f"Turn this article into a 60-90 second YouTube Shorts / short video script. Include: TITLE (under 70 chars), "
+            f"HOOK (first 3 seconds), SCRIPT (spoken lines with [on-screen text] cues), CALL TO ACTION, DESCRIPTION, 5 HASHTAGS. "
+            f"Only use facts from the article; invent nothing.\n\nARTICLE: {p['title']}\n{body}", max_tokens=2000)
+        os.makedirs("video_scripts", exist_ok=True); open(path, "w", encoding="utf-8").write(txt)
+        log("video script saved:", path)
+    except Exception as ex:
+        log("video script skipped:", ex)
+
+def backfill():
+    """Older posts get a cover picture (without rewriting your manual edits); a couple of scripts per day."""
+    made = 0
+    for p in db.execute("SELECT * FROM posts WHERE status='published'").fetchall():
+        pf = f"_posts/{p['published']}-{p['slug']}.md"
+        if os.path.exists(pf):
+            txt = open(pf, encoding="utf-8").read(); parts = txt.split("---", 2)
+            if len(parts) == 3 and "image:" not in parts[1]:
+                img = ensure_cover(p)
+                if img:
+                    cr = f"assets/covers/{p['slug']}.txt"
+                    extra = f"image: {img}\n" + (f"image_credit: {json.dumps(open(cr).read().strip())}\n" if os.path.exists(cr) else "")
+                    open(pf, "w", encoding="utf-8").write("---" + parts[1].rstrip("\n") + "\n" + extra + "---" + parts[2])
+                    log("cover added:", p["slug"])
+        if made < 2 and not os.path.exists(f"video_scripts/{p['slug']}.md") and cfg("GENERATE_VIDEO_SCRIPTS", "true").lower() == "true":
+            video_script(p); made += 1
+
 def publish(post_id, status):
     p = db.execute("SELECT * FROM posts WHERE id=?", (post_id,)).fetchone()
-    pub = p["published"] or today()
+    pub = p["published"] or today(); post_file = f"_posts/{pub}-{p['slug']}.md"
+    extra = ""
+    img = ensure_cover(p)
+    if img:
+        extra += f"image: {img}\n"; cr = f"assets/covers/{p['slug']}.txt"
+        if os.path.exists(cr): extra += f"image_credit: {json.dumps(open(cr).read().strip())}\n"
+    if os.path.exists(post_file):  # keep a YouTube video id you added by hand
+        m = re.search(r"^youtube:\s*(\S+)", open(post_file, encoding="utf-8").read(), re.M)
+        if m: extra += f"youtube: {m.group(1)}\n"
     front = (f'---\nlayout: post\ntitle: {json.dumps(p["title"])}\ndescription: {json.dumps(p["excerpt"] or "")}\n'
-             f'date: {pub} 00:00:00 +0000\npermalink: /{p["slug"]}/\n---\n\n')
+             f'date: {pub} 00:00:00 +0000\npermalink: /{p["slug"]}/\n{extra}---\n\n')
     draft = f"_drafts/{p['slug']}.md"
     if status == "publish":
         os.makedirs("_posts", exist_ok=True)
-        open(f"_posts/{pub}-{p['slug']}.md", "w", encoding="utf-8").write(front + p["html"])
+        open(post_file, "w", encoding="utf-8").write(front + p["html"])
         if os.path.exists(draft): os.remove(draft)
         db.execute("UPDATE posts SET status='published', url=?, published=? WHERE id=?", (f"{SITE}/{p['slug']}/", pub, post_id))
         log("PUBLISHED:", p["title"])
@@ -175,6 +288,7 @@ def create_new_posts():
                 (t["id"], p["title"], unique_slug(p.get("slug") or p["title"]), p["html"], p["score"], p.get("meta_description", "")))
             db.execute("UPDATE topics SET status='written' WHERE id=?", (t["id"],)); db.commit()
             publish(cur.lastrowid, "publish" if AUTO_PUBLISH and p["score"] >= MIN_SCORE else "draft")
+            video_script(db.execute("SELECT * FROM posts WHERE id=?", (cur.lastrowid,)).fetchone())
         except Exception as ex:
             log("post failed:", t["keyword"], ex); db.execute("UPDATE topics SET status='failed' WHERE id=?", (t["id"],)); db.commit()
 
@@ -256,7 +370,7 @@ def apply_domain(domain):
 def cycle():
     if not LLM_KEY: sys.exit("Missing LLM_API_KEY (add it as a GitHub secret).")
     if cfg("CUSTOM_DOMAIN"): apply_domain(cfg("CUSTOM_DOMAIN"))
-    log("cycle start; site:", SITE); sync_metrics(); optimize(); create_new_posts(); report()
+    log("cycle start; site:", SITE); sync_metrics(); backfill(); optimize(); create_new_posts(); report()
 
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "once"
