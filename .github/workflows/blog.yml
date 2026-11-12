@@ -1,0 +1,36 @@
+name: Blog Manager
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+  pages: write
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - name: Run blog manager
+        run: python blog_manager.py once
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          POSTS_PER_DAY: ${{ vars.POSTS_PER_DAY }}
+          AD_SNIPPET: ${{ vars.AD_SNIPPET }}
+          CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+      - name: Save new posts
+        run: |
+          git config user.name "blog-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || (git commit -m "Daily blog update" && git push)
+      - name: Trigger site rebuild
+        run: gh api -X POST repos/${{ github.repository }}/pages/builds || true
+        env:
+          GH_TOKEN: ${{ github.token }}
