@@ -16,4 +16,4 @@ exclude:
   - video_scripts
   - blog_manager(1).py
 webmaster_verifications:
-  google: <meta name="google-site-verification" content="iE1CGLaw-1flyI0vwazoLTG8TC3QS4cpk5YiiZByvbg" />
+  google: ...<meta name="google-site-verification" content="iE1CGLaw-1flyI0vwazoLTG8TC3QS4cpk5YiiZByvbg" />
