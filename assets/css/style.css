@@ -11,7 +11,7 @@ nav{display:flex;gap:18px;align-items:center}nav a{color:var(--ink);text-decorat
 .btn{display:inline-block;background:var(--brand);color:#fff!important;padding:10px 20px;border-radius:999px;font-weight:600;text-decoration:none;transition:.2s}
 .btn:hover{background:var(--brand-d);transform:translateY(-2px)}.btn.small{padding:6px 14px}
 .btn.big{padding:14px 28px;font-size:18px;margin:6px 10px 6px 0}.btn.ghost{background:#fff;color:var(--brand)!important;border:2px solid var(--brand)}
-.hero{background:linear-gradient(135deg,#FFE3C8 0%,#FFD1DC 50%,#CDEFE9 100%);padding:70px 0 60px}
+.hero{background:linear-gradient(135deg,#DDF6D2 0%,#FFF3CC 55%,#FFD9C2 100%);padding:70px 0 60px}
 .hero h1{font-size:clamp(30px,5vw,52px);font-weight:800}.hero h1 span{color:var(--brand-d);font-size:.62em;font-weight:700}
 .hero p{max-width:620px;font-size:19px;color:#4a4757;margin:0 0 24px}
 .section-title{margin:44px 0 22px;font-size:28px}

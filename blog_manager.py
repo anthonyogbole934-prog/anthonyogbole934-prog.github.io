@@ -12,6 +12,9 @@ Commands: once | run | report | approve
 import os, sys, re, csv, json, time, sqlite3, datetime as dt
 from urllib.parse import urlparse
 import requests
+try:  # lets future secrets (API keys) work without editing the workflow again
+    for _k, _v in json.loads(os.environ.get("ALL_SECRETS") or "{}").items(): os.environ.setdefault(_k, _v)
+except Exception: pass
 try:
     import PIL  # noqa
 except ImportError:
@@ -20,7 +23,10 @@ except ImportError:
 
 # ---------------- config (all optional; sensible defaults) ----------------
 def cfg(k, d=""): return os.environ.get(k) or d
-NICHE = cfg("BLOG_NICHE", "AI tools, software and online income ideas for freelancers, remote workers and solo business owners")
+OLD_NICHE = "AI tools, software and online income ideas for freelancers, remote workers and solo business owners"
+NICHE = cfg("BLOG_NICHE", "Football (soccer) and entertainment: evergreen explainers, tactics, history, lists and quizzes, how-to guides, football games, films and documentaries, fan culture, and match previews built from verified fixture data")
+try: SITE_NAME = re.search(r"^title:\s*(.+?)\s*$", open("_config.yml", encoding="utf-8").read(), re.M).group(1).strip("\"'")
+except Exception: SITE_NAME = "Blog"
 LLM_BASE = cfg("LLM_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai").rstrip("/")
 LLM_MODEL = cfg("LLM_MODEL", "gemini-flash-latest")
 LLM_KEY = cfg("LLM_API_KEY")
@@ -83,10 +89,13 @@ def plan_topics(n=10):
         f"""Niche: {NICHE}
 Existing keywords (never repeat): {existing[-80:]}
 Performance so far:\n{performance_summary() or 'none yet'}
-Propose {n} article topics: low-competition long-tail queries with clear search intent (comparisons,
-'best X for Y', 'how to', alternatives, pricing, tutorials) that fit affiliate monetization. Audience is
-global (US/UK/CA/AU/EU/Asia/Africa); avoid country-specific laws. Weight toward clusters that earn.
-JSON: [{{"keyword":"","angle":"","cluster":""}}]""", as_json=True, max_tokens=3000)
+Propose {n} article topics. Mix: about 70% EVERGREEN football content that stays true for years (rules and tactics
+explained, history and records of great eras and rivalries, 'best X' lists, how-to guides such as how to watch football,
+fantasy football basics or how to start playing, buying guides for boots and jerseys, football video games, films and
+documentaries) and about 30% wider entertainment tie-ins. NEVER propose topics that depend on live facts (transfer
+rumours, current injuries, league tables, latest results, current form) because they cannot be verified here. Never
+propose betting or gambling topics, and no rumours about real people. Use long-tail queries with clear search intent.
+Audience is global. JSON: [{{"keyword":"","angle":"","cluster":""}}]""", as_json=True, max_tokens=3000)
     for t in out:
         db.execute("INSERT OR IGNORE INTO topics(keyword,angle,cluster,created) VALUES(?,?,?,?)",
                    (t["keyword"], t.get("angle", ""), t.get("cluster", "general"), today()))
@@ -103,6 +112,11 @@ Do not put an FAQ in html; put 3-5 FAQs in "faq". Output JSON only:
 WRITER_SYS += (f"\nToday's date is {today()}. Only put a year in the title if it is {dt.date.today().year}; never use older years. "
     "Proofread carefully: no typos. Do not state exact prices, free-plan limits or policy details unless you are certain; "
     "otherwise say 'check the official site for current pricing'. Prefer timeless advice over fast-changing specifics.")
+
+WRITER_SYS += ("\nFootball/entertainment rules: never state scores, transfers, injuries, standings, current form, salaries or "
+    "statistics unless they are given in the brief; use well-established history only when certain and word dates and numbers "
+    "cautiously; no rumours or claims about real people's private lives; no betting tips; never claim affiliation with any club, "
+    "league or broadcaster; label opinions as opinions; write with energy and fan-friendly personality.")
 
 def affiliates():
     try: return json.load(open("affiliates.json"))
@@ -188,9 +202,9 @@ def make_cover(title, cluster, slug):
         for i, ln in enumerate(lines):
             d.text((72, y0 + i * lh + 3), ln, font=F(size), fill=tuple(int(c * 0.55) for c in a))
             d.text((70, y0 + i * lh), ln, font=F(size), fill=(255, 255, 255))
-        f = F(28); label = "SoloStack"; tw = d.textlength(label, font=f)
+        f = F(28); label = SITE_NAME; tw = d.textlength(label, font=f)
         d.rounded_rectangle((60, 46, 60 + tw + 44, 100), 27, fill=(255, 255, 255)); d.text((82, 55), label, font=f, fill=tuple(int(c * 0.8) for c in a))
-        tag = cluster.upper()[:28]; tw = d.textlength(tag, font=F(24))
+        tag = cluster.replace("-", " ").upper()[:28]; tw = d.textlength(tag, font=F(24))
         d.rounded_rectangle((60, 540, 60 + tw + 40, 586), 23, outline=(255, 255, 255), width=3); d.text((80, 548), tag, font=F(24), fill=(255, 255, 255))
         os.makedirs("assets/covers", exist_ok=True); img.save(path, optimize=True)
         return "/" + path
@@ -276,11 +290,54 @@ def publish(post_id, status):
         db.execute("UPDATE posts SET status='draft' WHERE id=?", (post_id,)); log("DRAFT (needs review):", p["title"])
     db.commit()
 
+def retire_old_niche():
+    """If the niche changed, take down the old off-topic posts (they stay in GitHub history)."""
+    f = f"{DATA}/niche.txt"
+    old = open(f).read().strip() if os.path.exists(f) else (OLD_NICHE if db.execute("SELECT 1 FROM posts LIMIT 1").fetchone() else NICHE)
+    if old != NICHE:
+        for p in db.execute("SELECT * FROM posts WHERE status IN ('published','draft')").fetchall():
+            for path in (f"_posts/{p['published']}-{p['slug']}.md", f"_drafts/{p['slug']}.md"):
+                if os.path.exists(path): os.remove(path)
+            db.execute("UPDATE posts SET status='retired' WHERE id=?", (p["id"],))
+        db.execute("UPDATE topics SET status='retired' WHERE status='queued'"); db.commit()
+        log("niche changed: old posts retired")
+    open(f, "w").write(NICHE)
+
+FD_KEY = cfg("FOOTBALL_DATA_KEY")
+def match_preview_topics():
+    """Optional: real fixtures from football-data.org (free key) so previews use verified facts. Fridays and Saturdays."""
+    if not FD_KEY or dt.date.today().weekday() not in (4, 5): return
+    if db.execute("SELECT 1 FROM topics WHERE cluster='match-preview' AND created=?", (today(),)).fetchone(): return
+    try:
+        r = requests.get("https://api.football-data.org/v4/matches", headers={"X-Auth-Token": FD_KEY}, timeout=30,
+            params={"dateFrom": today(), "dateTo": (dt.date.today() + dt.timedelta(days=3)).isoformat()}); r.raise_for_status()
+        order = ["CL", "PL", "PD", "SA", "BL1", "FL1"]
+        ms = [m for m in r.json().get("matches", []) if m.get("status") in ("TIMED", "SCHEDULED")]
+        ms.sort(key=lambda m: order.index(m["competition"]["code"]) if m["competition"].get("code") in order else 99)
+        for m in ms[:1]:
+            h, a, d = m["homeTeam"]["name"], m["awayTeam"]["name"], m["utcDate"][:10]
+            facts = (f"Competition: {m['competition']['name']}; kickoff (UTC): {m['utcDate']}; home: {h}; away: {a}; "
+                     f"matchday: {m.get('matchday')}.")
+            db.execute("INSERT OR IGNORE INTO topics(keyword,angle,cluster,created) VALUES(?,?,?,?)",
+                (f"{h} vs {a} preview ({d})", "MATCH PREVIEW. Use ONLY these verified facts and add NO lineups, injuries, form, "
+                 "scores or statistics; mark any prediction clearly as opinion; explain what is at stake in general terms. " + facts,
+                 "match-preview", today()))
+        db.commit(); log("match preview topic added")
+    except Exception as ex: log("match previews skipped:", ex)
+
+def next_topic():
+    while True:
+        t = db.execute("SELECT * FROM topics WHERE status='queued' ORDER BY (cluster='match-preview') DESC, id LIMIT 1").fetchone()
+        if t and t["cluster"] == "match-preview":
+            m = re.search(r"\((\d{4}-\d\d-\d\d)\)", t["keyword"])
+            if m and m.group(1) < today():  # match already played: preview is stale
+                db.execute("UPDATE topics SET status='stale' WHERE id=?", (t["id"],)); db.commit(); continue
+        return t
+
 def create_new_posts():
-    q = "SELECT * FROM topics WHERE status='queued' ORDER BY id LIMIT 1"
     for _ in range(POSTS_PER_DAY):
-        t = db.execute(q).fetchone()
-        if not t: plan_topics(); t = db.execute(q).fetchone()
+        t = next_topic()
+        if not t: plan_topics(); t = next_topic()
         if not t: log("no topics available"); return
         try:
             p = write_post(t)
@@ -370,6 +427,7 @@ def apply_domain(domain):
 def cycle():
     if not LLM_KEY: sys.exit("Missing LLM_API_KEY (add it as a GitHub secret).")
     if cfg("CUSTOM_DOMAIN"): apply_domain(cfg("CUSTOM_DOMAIN"))
+    retire_old_niche(); match_preview_topics()
     log("cycle start; site:", SITE); sync_metrics(); backfill(); optimize(); create_new_posts(); report()
 
 if __name__ == "__main__":
