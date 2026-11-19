@@ -21,6 +21,7 @@ jobs:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: ${{ vars.LLM_MODEL }}
           ALL_SECRETS: ${{ toJSON(secrets) }}
+          ALL_SECRETS: ${{ toJSON(secrets) }}
           POSTS_PER_DAY: ${{ vars.POSTS_PER_DAY }}
           AD_SNIPPET: ${{ vars.AD_SNIPPET }}
           CUSTOM_DOMAIN: ${{ vars.CUSTOM_DOMAIN }}
